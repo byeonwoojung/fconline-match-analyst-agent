@@ -1,0 +1,21 @@
+# Core
+streamlit>=1.29.0
+langchain>=0.1.0
+langchain-openai>=0.0.5
+langchain-community>=0.0.10
+
+# Vector Store
+chromadb>=0.4.0
+
+# Embeddings
+openai>=1.0.0
+
+# Data Processing
+pandas>=2.0.0
+numpy>=1.24.0
+
+# Visualization
+plotly>=5.18.0
+
+# Utils
+python-dotenv>=1.0.0
