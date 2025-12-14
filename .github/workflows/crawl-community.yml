@@ -25,11 +25,13 @@ jobs:
       TZ: Asia/Seoul
 
     steps:
-      # 1. 저장소 체크아웃
+      # 1. 저장소 체크아웃 (github-actions-community 브랜치)
       - name: 📥 저장소 체크아웃
         uses: actions/checkout@v4
         with:
+          ref: github-actions-community
           token: ${{ secrets.GITHUB_TOKEN }}
+          fetch-depth: 0  # 전체 히스토리 (rebase 위해)
 
       # 2. Node.js 설정
       - name: 🟢 Node.js 설정
@@ -88,23 +90,40 @@ jobs:
             fi
           fi
 
-      # 8. 변경사항 커밋 및 푸시
+      # 8. 변경사항 커밋 및 푸시 (충돌 방지)
       - name: 💾 수집 데이터 저장
+        working-directory: backend/crawler-fconline-community
         run: |
           git config --local user.email "github-actions[bot]@users.noreply.github.com"
           git config --local user.name "github-actions[bot]"
           
           # 변경사항 확인
-          git add backend/crawler-fconline-community/data/
+          git add data/
           
           if git diff --staged --quiet; then
             echo "📭 새로운 데이터가 없습니다."
-          else
-            COMMIT_TIME=$(TZ=Asia/Seoul date '+%Y-%m-%d %H:%M:%S KST')
-            git commit -m "📊 커뮤니티 크롤링: ${COMMIT_TIME}"
-            git push
-            echo "✅ 새로운 데이터가 저장되었습니다."
+            exit 0
           fi
+          
+          COMMIT_TIME=$(TZ=Asia/Seoul date '+%Y-%m-%d %H:%M:%S KST')
+          git commit -m "📊 커뮤니티 크롤링: ${COMMIT_TIME}"
+          
+          # 푸시 전 최신 상태 pull (충돌 방지)
+          # visited.json 충돌 시 양쪽 모두 병합
+          git pull --rebase origin github-actions-community || {
+            echo "⚠️ Rebase 충돌 발생. visited.json 병합 시도..."
+            
+            # visited.json 충돌 해결: 양쪽 visited 배열 병합
+            if [ -f data/visited.json ]; then
+              # 현재 버전과 원격 버전 병합
+              git checkout --theirs data/visited.json 2>/dev/null || true
+              git add data/visited.json
+              git rebase --continue || git rebase --abort
+            fi
+          }
+          
+          git push origin github-actions-community
+          echo "✅ github-actions-community 브랜치에 저장 완료"
 
       # 9. 아티팩트 업로드 (백업용)
       - name: 📤 데이터 아티팩트 업로드
