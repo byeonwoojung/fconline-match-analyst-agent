@@ -1,0 +1,116 @@
+name: FC Online 커뮤니티 크롤링
+
+on:
+  # 수동 실행
+  workflow_dispatch:
+    inputs:
+      max_pages:
+        description: '최대 페이지 수 (0 = 무제한)'
+        required: false
+        default: '0'
+        type: string
+
+# 동시 실행 방지
+concurrency:
+  group: community-crawler
+  cancel-in-progress: false
+
+jobs:
+  crawl:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360  # 최대 6시간
+
+    # 한국 시간대 설정
+    env:
+      TZ: Asia/Seoul
+
+    steps:
+      # 1. 저장소 체크아웃
+      - name: 📥 저장소 체크아웃
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      # 2. Node.js 설정
+      - name: 🟢 Node.js 설정
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: backend/crawler-fconline-community/package-lock.json
+
+      # 3. 의존성 설치
+      - name: 📦 의존성 설치
+        working-directory: backend/crawler-fconline-community
+        run: npm ci
+
+      # 4. Puppeteer용 브라우저 설치
+      - name: 🌐 Chromium 브라우저 설치
+        working-directory: backend/crawler-fconline-community
+        run: npx puppeteer browsers install chrome
+
+      # 5. 데이터 폴더 생성
+      - name: 📁 데이터 폴더 준비
+        working-directory: backend/crawler-fconline-community
+        run: mkdir -p data
+
+      # 6. 크롤링 실행
+      - name: 🕷️ 커뮤니티 크롤링 실행
+        working-directory: backend/crawler-fconline-community
+        run: |
+          echo "🕐 시작 시간 (KST): $(date '+%Y-%m-%d %H:%M:%S')"
+          node ./src/crawler-community.js
+          echo "🕐 종료 시간 (KST): $(date '+%Y-%m-%d %H:%M:%S')"
+        env:
+          MAX_PAGES: ${{ github.event.inputs.max_pages }}
+
+      # 7. 수집 결과 요약
+      - name: 📊 수집 결과 요약
+        working-directory: backend/crawler-fconline-community
+        run: |
+          echo "=== 수집 결과 (KST: $(date '+%Y-%m-%d %H:%M:%S')) ==="
+          
+          # visited.json 확인
+          if [ -f data/visited.json ]; then
+            VISITED_COUNT=$(cat data/visited.json | jq '.visited | length')
+            echo "📋 총 방문 게시글: ${VISITED_COUNT}개"
+          fi
+          
+          # 오늘 날짜 폴더 확인
+          TODAY=$(date '+%y-%m-%d')
+          if [ -d "data/${TODAY}" ]; then
+            if [ -f "data/${TODAY}/posts.jsonl" ]; then
+              POST_COUNT=$(wc -l < "data/${TODAY}/posts.jsonl" | tr -d ' ')
+              echo "📝 오늘 수집된 게시글: ${POST_COUNT}개"
+              echo ""
+              echo "최근 5개 게시글:"
+              tail -5 "data/${TODAY}/posts.jsonl" | jq -r '.title // "제목없음"' 2>/dev/null || echo "(파싱 오류)"
+            fi
+          fi
+
+      # 8. 변경사항 커밋 및 푸시
+      - name: 💾 수집 데이터 저장
+        run: |
+          git config --local user.email "github-actions[bot]@users.noreply.github.com"
+          git config --local user.name "github-actions[bot]"
+          
+          # 변경사항 확인
+          git add backend/crawler-fconline-community/data/
+          
+          if git diff --staged --quiet; then
+            echo "📭 새로운 데이터가 없습니다."
+          else
+            COMMIT_TIME=$(TZ=Asia/Seoul date '+%Y-%m-%d %H:%M:%S KST')
+            git commit -m "📊 커뮤니티 크롤링: ${COMMIT_TIME}"
+            git push
+            echo "✅ 새로운 데이터가 저장되었습니다."
+          fi
+
+      # 9. 아티팩트 업로드 (백업용)
+      - name: 📤 데이터 아티팩트 업로드
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: crawl-data-${{ github.run_id }}
+          path: backend/crawler-fconline-community/data/
+          retention-days: 30

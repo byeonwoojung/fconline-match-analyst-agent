@@ -1,0 +1,22 @@
+{
+  "name": "crawler-fconline-community",
+  "version": "1.0.0",
+  "description": "FC Online 공식 커뮤니티 게시판 크롤러 (Puppeteer)",
+  "main": "src/crawler-community.js",
+  "type": "module",
+  "scripts": {
+    "crawl": "node src/crawler-community.js",
+    "crawl:debug": "node src/crawler-community.js --no-headless"
+  },
+  "keywords": [
+    "fconline",
+    "crawler",
+    "puppeteer",
+    "community"
+  ],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "puppeteer": "^23.0.0"
+  }
+}
