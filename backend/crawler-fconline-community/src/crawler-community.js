@@ -404,10 +404,10 @@ async function parseArticleDetail(page, articleNo) {
       const contentBody = document.querySelector('.content_body');
       if (!contentBody) return '';
       
-      // img 태그를 <img 자리>로 대체
+      // img 태그를 [img 자리]로 대체
       const clone = contentBody.cloneNode(true);
       clone.querySelectorAll('img').forEach(img => {
-        const placeholder = document.createTextNode('<img 자리>');
+        const placeholder = document.createTextNode('[img 자리]');
         img.parentNode.replaceChild(placeholder, img);
       });
       
