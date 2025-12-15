@@ -25,20 +25,23 @@ const __dirname = path.dirname(__filename);
 // ============================================================================
 const CONFIG = {
   BASE_URL: 'https://fconline.nexon.com/community/free',
-  // Rate limiting (밀리초)
+  // Rate limiting (밀리초) - GitHub Actions에서 안정적으로 동작하도록 충분한 딜레이
   DELAY: {
-    BETWEEN_POSTS_MIN: 1000,     // 게시글 간 최소 1초
-    BETWEEN_POSTS_MAX: 3000,     // 게시글 간 최대 3초
-    EVERY_10_POSTS_MIN: 5000,    // 10개 게시글마다 최소 5초
-    EVERY_10_POSTS_MAX: 10000,   // 10개 게시글마다 최대 10초
-    BETWEEN_PAGES_MIN: 1000,     // 페이지 간 최소 1초
-    BETWEEN_PAGES_MAX: 3000,     // 페이지 간 최대 3초
-    EVERY_10_PAGES_MIN: 120000,  // 10페이지마다 최소 2분
-    EVERY_10_PAGES_MAX: 300000,  // 10페이지마다 최대 5분
-    EVERY_30_PAGES_MIN: 180000,  // 30페이지마다 최소 3분
-    EVERY_30_PAGES_MAX: 300000,  // 30페이지마다 최대 5분
-    EVERY_50_PAGES_MIN: 300000,  // 50페이지마다 최소 5분
-    EVERY_50_PAGES_MAX: 360000,  // 50페이지마다 최대 6분
+    BETWEEN_POSTS_MIN: 2000,     // 게시글 간 최소 2초
+    BETWEEN_POSTS_MAX: 4000,     // 게시글 간 최대 4초
+    EVERY_10_POSTS_MIN: 10000,   // 10개 게시글마다 최소 10초
+    EVERY_10_POSTS_MAX: 15000,   // 10개 게시글마다 최대 15초
+    BETWEEN_PAGES_MIN: 2000,     // 페이지 간 최소 2초
+    BETWEEN_PAGES_MAX: 4000,     // 페이지 간 최대 4초
+    EVERY_3_PAGES_MIN: 60000,    // 3페이지마다 최소 1분
+    EVERY_3_PAGES_MAX: 180000,   // 3페이지마다 최대 3분
+    EVERY_10_PAGES_MIN: 480000,  // 10페이지마다 최소 8분
+    EVERY_10_PAGES_MAX: 720000,  // 10페이지마다 최대 12분
+  },
+  // 타임아웃 설정
+  TIMEOUT: {
+    PAGE_LOAD: 180000,          // 페이지 로딩 타임아웃 3분
+    RECOVERY_WAIT: 900000,      // 타임아웃 후 복구 대기 15분
   },
   // 1달 전까지 수집
   MONTHS_TO_CRAWL: 1,
@@ -401,10 +404,10 @@ async function parseArticleDetail(page, articleNo) {
       const contentBody = document.querySelector('.content_body');
       if (!contentBody) return '';
       
-      // img 태그를 <img 자리>로 대체
+      // img 태그를 [img 자리]로 대체
       const clone = contentBody.cloneNode(true);
       clone.querySelectorAll('img').forEach(img => {
-        const placeholder = document.createTextNode('<img 자리>');
+        const placeholder = document.createTextNode('[img 자리]');
         img.parentNode.replaceChild(placeholder, img);
       });
       
@@ -715,10 +718,41 @@ async function crawl() {
         console.log(`\n📰 [${article.articleNo}] "${article.title.slice(0, 30)}..." 수집 중...`);
 
         try {
-          // 게시글 상세 페이지로 이동
+          // 게시글 상세 페이지로 이동 (3분 타임아웃)
           const articleUrl = `https://fconline.nexon.com${article.href}`;
-          await page.goto(articleUrl, { waitUntil: 'networkidle2', timeout: 30000 });
-          visitedDetailPage = true;  // 상세 페이지 방문 표시
+          try {
+            await page.goto(articleUrl, { waitUntil: 'networkidle2', timeout: CONFIG.TIMEOUT.PAGE_LOAD });
+            visitedDetailPage = true;  // 상세 페이지 방문 표시
+          } catch (timeoutErr) {
+            if (timeoutErr.message.includes('timeout') || timeoutErr.message.includes('Timeout')) {
+              console.log(`\n⏰ [${article.articleNo}] 페이지 로딩 타임아웃 (3분). 메인 목록으로 복귀 후 15분 대기...`);
+              
+              // 메인 목록으로 돌아가기
+              try {
+                await page.goto(CONFIG.BASE_URL, { waitUntil: 'networkidle2', timeout: 60000 });
+              } catch (e) {
+                console.log('⚠️ 메인 목록 이동 실패, 브라우저 새로고침...');
+                await page.reload({ waitUntil: 'networkidle2', timeout: 60000 });
+              }
+              
+              // 15분 대기
+              console.log(`⏸️ 15분 대기 중... (${new Date().toLocaleString('ko-KR', { timeZone: 'Asia/Seoul' })})`);
+              await sleep(CONFIG.TIMEOUT.RECOVERY_WAIT);
+              console.log(`✅ 대기 완료. 크롤링 재개... (${new Date().toLocaleString('ko-KR', { timeZone: 'Asia/Seoul' })})`);
+              
+              // 현재 페이지로 다시 이동
+              await page.evaluate((pNum) => {
+                if (typeof Article !== 'undefined' && Article.ArticleList) {
+                  Article.ArticleList(null, pNum, '#divListPart', '', 'title', '1', '0', '/community/free/');
+                }
+              }, pageNum);
+              await sleep(5000);
+              
+              // 이 게시글은 스킵하고 다음으로
+              continue;
+            }
+            throw timeoutErr;
+          }
           
           // 상세 정보 파싱
           const detail = await parseArticleDetail(page, article.articleNo);
@@ -780,23 +814,17 @@ async function crawl() {
       
       // 이 페이지에서 수집한 게시글이 있을 때만 휴식
       if (crawledInThisPage > 0) {
-        // 50페이지마다 긴 휴식 (5~6분)
-        if ((pageNum - 1) % 50 === 0) {
-          const veryLongDelay = randomDelay(CONFIG.DELAY.EVERY_50_PAGES_MIN, CONFIG.DELAY.EVERY_50_PAGES_MAX);
-          console.log(`\n☕ ${pageNum - 1}페이지 완료 (${crawledInThisPage}개 수집). ${Math.round(veryLongDelay / 60000)}분 휴식...`);
-          await sleep(veryLongDelay);
-        }
-        // 30페이지마다 긴 휴식
-        else if ((pageNum - 1) % 30 === 0) {
-          const longDelay = randomDelay(CONFIG.DELAY.EVERY_30_PAGES_MIN, CONFIG.DELAY.EVERY_30_PAGES_MAX);
-          console.log(`\n⏸️ ${pageNum - 1}페이지 완료 (${crawledInThisPage}개 수집). ${Math.round(longDelay / 1000)}초 휴식...`);
+        // 10페이지마다 긴 휴식 (8~12분)
+        if ((pageNum - 1) % 10 === 0) {
+          const longDelay = randomDelay(CONFIG.DELAY.EVERY_10_PAGES_MIN, CONFIG.DELAY.EVERY_10_PAGES_MAX);
+          console.log(`\n☕ ${pageNum - 1}페이지 완료 (${crawledInThisPage}개 수집). ${Math.round(longDelay / 60000)}분 휴식...`);
           await sleep(longDelay);
         }
-        // 10페이지마다 중간 휴식
-        else if ((pageNum - 1) % 10 === 0) {
-          const midDelay = randomDelay(CONFIG.DELAY.EVERY_10_PAGES_MIN, CONFIG.DELAY.EVERY_10_PAGES_MAX);
-          console.log(`\n⏸️ ${pageNum - 1}페이지 완료 (${crawledInThisPage}개 수집). ${Math.round(midDelay / 1000)}초 휴식...`);
-          await sleep(midDelay);
+        // 3페이지마다 휴식 (1~3분)
+        else if ((pageNum - 1) % 3 === 0) {
+          const shortDelay = randomDelay(CONFIG.DELAY.EVERY_3_PAGES_MIN, CONFIG.DELAY.EVERY_3_PAGES_MAX);
+          console.log(`\n⏸️ ${pageNum - 1}페이지 완료 (${crawledInThisPage}개 수집). ${Math.round(shortDelay / 60000)}분 휴식...`);
+          await sleep(shortDelay);
         }
       } else {
         console.log(`📄 페이지 ${pageNum - 1}: 새로 수집한 게시글 없음, 휴식 없이 계속 진행`);
@@ -874,39 +902,63 @@ async function crawl() {
           }
         }
         
-        // AJAX 응답 대기
-        await sleep(randomDelay(2500, 3500));
+        // AJAX 응답 대기 (타임아웃 3분, 실패 시 15분 대기 후 1회 재시도)
+        // 페이지 로드 대기 함수
+        const waitForPageLoad = async (targetPage) => {
+          const pageLoadStart = Date.now();
+          
+          while (Date.now() - pageLoadStart < CONFIG.TIMEOUT.PAGE_LOAD) {
+            await sleep(2000);
+            
+            const currentPageCheck = await page.evaluate(() => {
+              const active = document.querySelector('.pagination_wrap li.active span');
+              return active ? parseInt(active.textContent) : null;
+            });
+            
+            if (currentPageCheck === targetPage) {
+              return true;
+            }
+            
+            // 30초마다 로딩 상태 로그
+            if ((Date.now() - pageLoadStart) % 30000 < 2000) {
+              console.log(`⏳ 페이지 ${targetPage} 로딩 대기 중... (${Math.round((Date.now() - pageLoadStart) / 1000)}초 경과)`);
+            }
+          }
+          return false;
+        };
         
-        // 페이지 이동 확인
-        const currentPageCheck = await page.evaluate(() => {
-          const active = document.querySelector('.pagination_wrap li.active span');
-          return active ? parseInt(active.textContent) : null;
-        });
+        // 첫 번째 시도
+        let pageLoaded = await waitForPageLoad(pageNum);
         
-        if (!currentPageCheck) {
-          console.log('⚠️ 페이지네이션을 찾을 수 없습니다. 크롤링 종료.');
-          break;
-        }
-        
-        if (currentPageCheck !== pageNum) {
-          console.log(`⚠️ 페이지 이동 확인 실패 (현재: ${currentPageCheck}, 목표: ${pageNum}). 재시도...`);
-          // Article.ArticleList로 재시도
-          await page.evaluate((pNum) => {
+        if (!pageLoaded) {
+          console.log(`⚠️ 페이지 ${pageNum} 로드 타임아웃 (3분 초과). 15분 대기 후 재시도...`);
+          
+          // 메인 페이지로 이동
+          try {
+            await page.goto(CONFIG.BASE_URL, { waitUntil: 'networkidle2', timeout: 60000 });
+          } catch (gotoErr) {
+            console.log('⚠️ 메인 페이지 이동 실패, 페이지 새로고침 시도...');
+            await page.reload({ waitUntil: 'networkidle2', timeout: 60000 });
+          }
+          
+          // 15분 대기
+          console.log(`🔄 메인 페이지로 이동 완료. ${Math.round(CONFIG.TIMEOUT.RECOVERY_WAIT / 60000)}분 대기 중...`);
+          await sleep(CONFIG.TIMEOUT.RECOVERY_WAIT);
+          console.log(`🔄 대기 완료, 페이지 ${pageNum}로 재이동 시도...`);
+          
+          // 다시 페이지 이동 시도
+          await page.evaluate((targetPage) => {
             if (typeof Article !== 'undefined' && Article.ArticleList) {
-              Article.ArticleList(null, pNum, '#divListPart', '', 'title', '1', '0', '/community/free/');
+              Article.ArticleList(null, targetPage, '#divListPart', '', 'title', '1', '0', '/community/free/');
             }
           }, pageNum);
-          await sleep(3000);
           
-          // 다시 확인
-          const recheckPage = await page.evaluate(() => {
-            const active = document.querySelector('.pagination_wrap li.active span');
-            return active ? parseInt(active.textContent) : null;
-          });
+          // 두 번째 시도
+          pageLoaded = await waitForPageLoad(pageNum);
           
-          if (recheckPage !== pageNum) {
-            console.log(`❌ 페이지 이동 실패. 크롤링 종료.`);
-            break;
+          if (!pageLoaded) {
+            // 재시도도 실패 → 에러 throw (finally에서 아티팩트 저장됨)
+            throw new Error(`❌ 페이지 ${pageNum} 이동 최종 실패 (재시도 후에도 응답 없음). 크롤링 중단.`);
           }
         }
         

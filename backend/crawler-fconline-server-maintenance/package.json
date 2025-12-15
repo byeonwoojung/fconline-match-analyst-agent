@@ -1,0 +1,22 @@
+{
+  "name": "crawler-fconline-server-maintenance",
+  "version": "1.0.0",
+  "description": "FC Online 서버 점검 공지 크롤러",
+  "type": "module",
+  "main": "src/crawler-maintenance.js",
+  "scripts": {
+    "crawl": "node src/crawler-maintenance.js",
+    "start": "node src/crawler-maintenance.js"
+  },
+  "keywords": [
+    "fconline",
+    "crawler",
+    "maintenance",
+    "puppeteer"
+  ],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "puppeteer": "^23.0.0"
+  }
+}
