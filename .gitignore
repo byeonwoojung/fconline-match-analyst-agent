@@ -10,6 +10,21 @@ backend/crawler-fconline-community/data/**/*.jsonl
 backend/crawler-fconline-server-maintenance/data/**/*.jsonl
 backend/api-fconline/data/
 
+# 전처리 데이터 (Bronze/Silver/Gold)
+data/bronze/**/*.jsonl
+data/bronze/**/*.json
+!data/bronze/**/.gitkeep
+data/silver/**/*.jsonl
+data/silver/**/*.json
+!data/silver/**/.gitkeep
+data/gold/**/*.jsonl
+data/gold/**/*.json
+!data/gold/**/.gitkeep
+
+# 메타데이터 (API에서 수집한 대용량 파일)
+backend/api-fconline/data/
+backend/data-preprocessing/meta/
+
 # IDE
 .vscode/
 .idea/
@@ -27,3 +42,6 @@ __pycache__/
 *.pyc
 .venv/
 venv/
+
+# Test files
+test-*
