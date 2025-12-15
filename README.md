@@ -1,4 +1,4 @@
-# fconline-match-analyst-agent
+# FC Online Match Analyst Agent
 
 FC Online 경기 분석 RAG 에이전트
 
@@ -13,85 +13,182 @@ FC Online 경기 분석 RAG 에이전트
 - "후반 막판에 실점이 많은데 왜 그런지 분석해줘"
 - "요즘 메타가 뭐야?"
 
+## 아키텍처
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                         Data Pipeline                           │
+├─────────────────────────────────────────────────────────────────┤
+│  [Raw Data]         [Bronze]         [Silver]         [Gold]   │
+│                                                                 │
+│  API Response   →   matchDetail   →   Lv1 변환    →   RAG 텍스트 │
+│  Community      →   posts.jsonl   →   (예정)      →   (예정)    │
+│  Server Notice  →   notices.jsonl →   (예정)      →   (예정)    │
+└─────────────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────────┐
+│                         Agent Layer                             │
+├─────────────────────────────────────────────────────────────────┤
+│  [Vector DB]              [Tools]              [LLM]            │
+│                                                                 │
+│  ChromaDB            get_overall_stats()      GPT-4o / Claude   │
+│  (match_summaries)   get_player_stats()                         │
+│                      get_concede_patterns()                     │
+│                      search_matches()                           │
+└─────────────────────────────────────────────────────────────────┘
+```
+
 ## 폴더 구조
 
 ```
 fconline-match-analyst-agent/
-├── backend/                    # 데이터 수집
-│   ├── api-fconline/           # Nexon Open API 크롤러
-│   ├── crawler-fconline-community/  # 커뮤니티 크롤러
-│   └── crawler-fconline-server-maintenance/  # 서버 점검 공지 크롤러
+├── backend/                           # 데이터 수집 & 전처리
+│   ├── api-fconline/                  # Nexon Open API 크롤러
+│   │   └── src/crawler-ouid.py        # OUID 및 매치 데이터 수집
+│   ├── crawler-fconline-community/    # 커뮤니티 크롤러
+│   ├── crawler-fconline-server-maintenance/  # 서버 점검 공지 크롤러
+│   └── data-preprocessing/            # 데이터 전처리 파이프라인
+│       ├── src/
+│       │   ├── bronze_to_silver_lv1.py  # Bronze → Silver 변환
+│       │   ├── silver_to_gold.py        # Silver → Gold 변환
+│       │   ├── config.py                # 경로 설정
+│       │   └── utils/                   # 유틸리티
+│       │       ├── goaltime.py          # goalTime 인코딩/디코딩
+│       │       ├── zone.py              # 좌표→구역 변환
+│       │       ├── schema_desc.py       # 슈팅/매치종료 타입 설명
+│       │       └── meta_loader.py       # 메타데이터 로더 (싱글톤)
+│       └── meta/                        # 메타데이터 (spid.json, seasonid.json 등)
 │
-├── agent/                      # RAG 에이전트 코어
-│   ├── config.py               # LLM, VectorDB 설정
-│   ├── embeddings/             # 임베딩 모듈
-│   │   ├── match_embedder.py   # 경기 데이터 → 텍스트 → 임베딩
-│   │   └── community_embedder.py  # 커뮤니티 글 임베딩
-│   ├── vectorstore/            # 벡터DB
-│   │   ├── indexer.py          # ChromaDB 인덱싱
-│   │   └── retriever.py        # 유사 문서 검색
-│   ├── chains/                 # LangChain 체인
-│   │   ├── match_analyzer.py   # 경기 분석 체인
-│   │   ├── community_analyzer.py  # 커뮤니티 분석 체인
-│   │   └── rag_chain.py        # 통합 RAG 체인
-│   └── prompts/                # 프롬프트 템플릿
+├── data/                              # 데이터 저장소 (gitignore)
+│   ├── bronze/                        # Raw → 정규화된 JSON
+│   │   └── matchDetail/*.jsonl
+│   ├── silver/                        # 변환된 데이터
+│   │   └── lv1/*.jsonl
+│   ├── gold/                          # RAG/Tool용 최종 데이터
+│   │   ├── match_summaries/
+│   │   │   ├── match_summaries.jsonl  # 경기별 자연어 서술 (RAG용)
+│   │   │   ├── overall_stats.json     # 전체 통계
+│   │   │   ├── time_zone_stats.json   # 시간대별 득점/실점 패턴
+│   │   │   ├── zone_stats.json        # 구역별 슈팅 통계
+│   │   │   ├── concede_patterns.json  # 실점 패턴 분석
+│   │   │   └── player_stats.json      # 선수별 누적 통계
+│   │   ├── community/                 # (예정)
+│   │   └── server-maintenance/        # (예정)
+│   └── vectordb/                      # ChromaDB 벡터 저장소
 │
-├── app/                        # Streamlit UI
-│   ├── main.py                 # 엔트리포인트
-│   ├── pages/                  # 페이지
-│   │   ├── 1_chat.py           # 채팅 (RAG 에이전트)
-│   │   ├── 2_match_history.py  # 경기 기록 조회
-│   │   └── 3_community.py      # 커뮤니티 트렌드
-│   ├── components/             # UI 컴포넌트
-│   └── utils/                  # 유틸리티
-│
-├── data/                       # 데이터 저장소
-│   └── vectordb/               # 벡터DB 파일
-│
-├── scripts/                    # 실행 스크립트
-│   ├── index_matches.py        # 경기 데이터 인덱싱
-│   └── index_community.py      # 커뮤니티 데이터 인덱싱
-│
-├── .env                        # API 키 (OpenAI 등)
-└── requirements.txt            # Python 의존성
+├── agent/                             # RAG 에이전트 (예정)
+├── app/                               # Streamlit UI (예정)
+├── scripts/                           # 실행 스크립트
+├── .env                               # API 키
+└── requirements.txt                   # Python 의존성
 ```
 
-## 데이터 수집
+## 데이터 파이프라인
 
-### API 데이터
-- **출처**: [Nexon Open API - FC Online](https://openapi.nexon.com/ko/game/fconline/)
-- **수집 항목**: 유저 OUID, 매치 기록, 선수/시즌/스펠 메타데이터
+### 1. Bronze Layer (수집된 원본 데이터)
+- Nexon API에서 수집한 matchDetail 원본
+- 커뮤니티 게시글 원본
+- 서버 점검 공지 원본
 
-### 커뮤니티 데이터
-- **출처**: [FC Online 자유게시판](https://fconline.nexon.com/community/free)
-- **수집 항목**: 게시글 제목, 내용, 스쿼드 메이커 정보
+### 2. Silver Layer (정규화/변환 데이터)
+- **Lv1 변환**: 선수명 매핑, goalTime 디코딩, 구역 정보 추가
+- goalTime 인코딩: `BASE = 2^24`, 전반(+0s), 후반(+2700s), 연장(+5400s/+6300s), 승부차기(+7200s)
+- Zone 시스템: 19개 구역 (x축 6등분 × y축 3등분 + 경기장외각)
 
-### 서버 점검 공지
-- **출처**: [FC Online 공지사항](https://fconline.nexon.com/news/notice/list) (점검 카테고리)
-- **수집 항목**: 점검 공지 제목, 내용, 날짜
+### 3. Gold Layer (RAG/Tool용 최종 데이터)
+- **match_summaries.jsonl**: 경기별 자연어 서술 (Vector DB 임베딩용)
+  ```
+  "호날두(26시즌, +5강)이 전반 23분 왼쪽 페널티박스에서 득점, 어시스트 구역: 상대 중앙 미드필더 지역"
+  ```
+- **overall_stats.json**: 승률, 평균 득점/실점 등 전체 통계
+- **time_zone_stats.json**: 시간대별 득점/실점 패턴
+- **zone_stats.json**: 구역별 슈팅 통계
+- **concede_patterns.json**: 실점 패턴 분석
+- **player_stats.json**: 선수별 누적 통계
+
+## 데이터 출처
+
+| 데이터 | 출처 | 수집 항목 |
+|--------|------|----------|
+| API 데이터 | [Nexon Open API](https://openapi.nexon.com/ko/game/fconline/) | 유저 OUID, 매치 기록, 선수/시즌 메타데이터 |
+| 커뮤니티 | [FC Online 자유게시판](https://fconline.nexon.com/community/free) | 게시글 제목, 내용, 스쿼드 메이커 정보 |
+| 서버 점검 | [FC Online 공지사항](https://fconline.nexon.com/news/notice/list) | 점검 공지 제목, 내용, 날짜 |
 
 ## 기술 스택
 
-- **Frontend**: Streamlit
-- **RAG Framework**: LangChain
-- **Vector DB**: ChromaDB
-- **Embedding**: OpenAI text-embedding-3-small
-- **LLM**: GPT-4o / Claude
+- **Data Pipeline**: Python, JSON/JSONL
+- **RAG Framework**: LangChain / LangGraph (예정)
+- **Vector DB**: ChromaDB (예정)
+- **Embedding**: OpenAI text-embedding-3-small (예정)
+- **LLM**: GPT-4o / Claude (예정)
+- **Frontend**: Streamlit (예정)
 
 ## 실행 방법
 
+### 1. 환경 설정
 ```bash
-# 1. 의존성 설치
+# 가상환경 생성 및 활성화
+python -m venv .venv
+source .venv/bin/activate
+
+# 의존성 설치
 pip install -r requirements.txt
 
-# 2. 환경 변수 설정
+# 환경 변수 설정
 cp .env.example .env
-# .env 파일에 OPENAI_API_KEY 설정
+# .env 파일에 NEXON_API_KEY 설정
+```
 
-# 3. 데이터 인덱싱
+### 2. 데이터 수집 (크롤러)
+```bash
+# API 데이터 수집
+cd backend/api-fconline
+python src/crawler-ouid.py
+
+# 커뮤니티 크롤링
+cd backend/crawler-fconline-community
+npm install && npm run crawl
+
+# 서버 점검 공지 크롤링
+cd backend/crawler-fconline-server-maintenance
+npm install && npm run crawl
+```
+
+### 3. 타겟 유저 설정
+분석할 유저의 OUID를 설정합니다:
+```python
+# backend/data-preprocessing/src/config.py
+TARGET_OUID = "8f0b662aaa013843b965a3c6fac7e8a9"  # 예시: 철마산호랑이
+```
+
+OUID는 Nexon Open API에서 닉네임으로 조회할 수 있습니다.
+
+### 4. 데이터 전처리
+```bash
+cd backend/data-preprocessing/src
+
+# Bronze → Silver 변환
+python bronze_to_silver_lv1.py
+
+# Silver → Gold 변환
+python silver_to_gold.py
+```
+
+### 5. 에이전트 실행 (예정)
+```bash
+# 데이터 인덱싱
 python scripts/index_matches.py
-python scripts/index_community.py
 
-# 4. Streamlit 앱 실행
+# Streamlit 앱 실행
 streamlit run app/main.py
 ```
+
+## 진행 상황
+
+- [x] 데이터 수집 (API, 커뮤니티, 서버점검)
+- [x] Bronze → Silver 변환
+- [x] Silver → Gold 변환 (match_summaries)
+- [ ] Vector DB 구축 (ChromaDB)
+- [ ] Tool 함수 구현
+- [ ] RAG Agent 구현
+- [ ] Streamlit UI
