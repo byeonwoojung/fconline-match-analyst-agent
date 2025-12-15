@@ -49,6 +49,51 @@ def load_silver_lv1():
     return data
 
 
+def is_valid_match(my_data: dict) -> bool:
+    """
+    유효한 경기인지 확인 (통계 처리 가능 여부)
+    - 오류 경기 (matchResult="오류", matchEndType=4 등) 제외
+    - 데이터가 null인 경우 제외
+    """
+    if not my_data:
+        return False
+
+    result = my_data.get("result", "")
+    end_type_code = my_data.get("end_type", {}).get("code", 0)
+
+    # 오류 경기 제외
+    if result == "오류":
+        return False
+
+    # matchEndType 4 이상은 비정상 종료
+    if end_type_code >= 4:
+        return False
+
+    # 통계가 전부 null인 경우 제외
+    possession = my_data.get("stats", {}).get("possession")
+    if possession is None:
+        return False
+
+    return True
+
+
+def get_match_result_text(my_data: dict) -> str:
+    """
+    경기 결과 텍스트 반환 (몰수승/몰수패 포함)
+    """
+    result = my_data.get("result", "")
+    end_type_code = my_data.get("end_type", {}).get("code", 0)
+
+    # 몰수승/몰수패 처리
+    if end_type_code == 1:
+        return "몰수승"
+    elif end_type_code == 2:
+        return "몰수패"
+
+    # 정상 경기
+    return {"승": "승리", "무": "무승부", "패": "패배"}.get(result, result)
+
+
 def get_player_grade(sp_id: int, players_stats: list) -> int:
     """매치 내 선수 스탯에서 강화등급 조회"""
     for p in players_stats:
@@ -185,6 +230,8 @@ def generate_match_summaries():
     gold_dir.mkdir(parents=True, exist_ok=True)
 
     summaries = []
+    error_count = 0
+    forfeit_count = 0
 
     for match in silver_data:
         match_id = match["match_id"]
@@ -203,30 +250,6 @@ def generate_match_summaries():
         if not my_data:
             continue
 
-        # 기본 정보
-        my_result = my_data["result"]
-        result_text = {"승": "승리", "무": "무승부", "패": "패배"}.get(
-            my_result, my_result
-        )
-
-        my_goals = my_data["shoot_summary"]["goals"]
-        opponent_goals = opponent_data["shoot_summary"]["goals"] if opponent_data else 0
-        opponent_nickname = opponent_data["nickname"] if opponent_data else "상대"
-
-        my_possession = my_data["stats"]["possession"]
-        opponent_possession = (
-            opponent_data["stats"]["possession"]
-            if opponent_data
-            else (100 - my_possession)
-        )
-
-        my_shots = my_data["shoot_summary"]["total"]
-        my_shots_on_target = my_data["shoot_summary"]["on_target"]
-        opponent_shots = opponent_data["shoot_summary"]["total"] if opponent_data else 0
-        opponent_shots_on_target = (
-            opponent_data["shoot_summary"]["on_target"] if opponent_data else 0
-        )
-
         # 날짜 포맷
         try:
             dt = datetime.fromisoformat(match_date.replace("Z", "+00:00"))
@@ -234,13 +257,89 @@ def generate_match_summaries():
         except:
             date_str = match_date
 
-        # 요약 문장
-        summary_text = (
-            f"{date_str} {match_type_name}에서 {opponent_nickname}을(를) 상대로 "
-            f"{my_goals}:{opponent_goals} {result_text}를 거뒀습니다. "
-            f"점유율 {my_possession}% vs {opponent_possession}%, "
-            f"슈팅 {my_shots}개(유효 {my_shots_on_target}개) vs {opponent_shots}개(유효 {opponent_shots_on_target}개)를 기록했습니다."
+        # 오류 경기 처리
+        my_result = my_data["result"]
+        end_type_code = my_data.get("end_type", {}).get("code", 0)
+
+        if my_result == "오류" or end_type_code >= 4:
+            # 오류 경기는 간단히 기록만
+            error_count += 1
+            summaries.append(
+                {
+                    "match_id": match_id,
+                    "match_date": match_date,
+                    "match_type": match_type_name,
+                    "result": "오류",
+                    "result_text": "오류",
+                    "is_forfeit": False,
+                    "is_error": True,
+                    "end_type_code": end_type_code,
+                    "score": {"me": None, "opponent": None},
+                    "opponent_nickname": (
+                        opponent_data["nickname"] if opponent_data else "알 수 없음"
+                    ),
+                    "summary_text": f"{date_str} {match_type_name}에서 오류로 경기가 종료되었습니다.",
+                    "my_goals_text": [],
+                    "conceded_goals_text": [],
+                    "full_narrative": f"{date_str} {match_type_name}에서 오류로 경기가 종료되었습니다. (데이터 없음)",
+                    "metadata": {
+                        "my_possession": None,
+                        "my_shots": None,
+                        "my_shots_on_target": None,
+                        "my_goals": None,
+                        "opponent_goals": None,
+                        "end_type_code": end_type_code,
+                    },
+                }
+            )
+            continue
+
+        # 몰수승/몰수패 처리
+        is_forfeit = end_type_code in [1, 2]
+        if is_forfeit:
+            forfeit_count += 1
+
+        result_text = get_match_result_text(my_data)
+
+        # 기본 정보 - 상대 데이터가 없으면 (몰수승 등) 기본값 사용
+        my_goals = my_data["shoot_summary"].get("goals") or 0
+        opponent_goals = (
+            (opponent_data["shoot_summary"].get("goals") or 0) if opponent_data else 0
         )
+        opponent_nickname = opponent_data["nickname"] if opponent_data else "상대(기권)"
+
+        my_possession = my_data["stats"].get("possession") or 0
+        opponent_possession = (
+            (opponent_data["stats"].get("possession") or 0)
+            if opponent_data
+            else (100 - my_possession if my_possession else 0)
+        )
+
+        my_shots = my_data["shoot_summary"].get("total") or 0
+        my_shots_on_target = my_data["shoot_summary"].get("on_target") or 0
+        opponent_shots = (
+            (opponent_data["shoot_summary"].get("total") or 0) if opponent_data else 0
+        )
+        opponent_shots_on_target = (
+            (opponent_data["shoot_summary"].get("on_target") or 0)
+            if opponent_data
+            else 0
+        )
+
+        # 요약 문장 - 몰수승/몰수패는 별도 처리
+        if is_forfeit:
+            summary_text = (
+                f"{date_str} {match_type_name}에서 {opponent_nickname}을(를) 상대로 "
+                f"{result_text}했습니다. "
+                f"점유율 {my_possession}%, 슈팅 {my_shots}개(유효 {my_shots_on_target}개)를 기록했습니다."
+            )
+        else:
+            summary_text = (
+                f"{date_str} {match_type_name}에서 {opponent_nickname}을(를) 상대로 "
+                f"{my_goals}:{opponent_goals} {result_text}를 거뒀습니다. "
+                f"점유율 {my_possession}% vs {opponent_possession}%, "
+                f"슈팅 {my_shots}개(유효 {my_shots_on_target}개) vs {opponent_shots}개(유효 {opponent_shots_on_target}개)를 기록했습니다."
+            )
 
         # 득점 상세
         my_goals_list = extract_goals_from_player(my_data, "득점")
@@ -278,6 +377,10 @@ def generate_match_summaries():
                 "match_date": match_date,
                 "match_type": match_type_name,
                 "result": my_result,
+                "result_text": result_text,
+                "is_forfeit": is_forfeit,
+                "is_error": False,
+                "end_type_code": end_type_code,
                 "score": {"me": my_goals, "opponent": opponent_goals},
                 "opponent_nickname": opponent_nickname,
                 "summary_text": summary_text,
@@ -300,6 +403,9 @@ def generate_match_summaries():
             f.write(json.dumps(s, ensure_ascii=False) + "\n")
 
     print(f"✅ match_summaries 생성 완료: {len(summaries)}건")
+    print(f"   - 정상 경기: {len(summaries) - error_count - forfeit_count}건")
+    print(f"   - 몰수승/몰수패: {forfeit_count}건")
+    print(f"   - 오류 경기: {error_count}건")
     print(f"   📁 {GOLD_OUTPUT['match_summaries']}")
 
 
@@ -312,6 +418,9 @@ def generate_overall_stats():
         "wins": 0,
         "draws": 0,
         "losses": 0,
+        "forfeit_wins": 0,
+        "forfeit_losses": 0,
+        "error_matches": 0,
         "total_goals_scored": 0,
         "total_goals_conceded": 0,
         "total_possession": 0,
@@ -337,11 +446,24 @@ def generate_overall_stats():
         if not my_data:
             continue
 
+        # 오류 경기 제외 (통계에서 제외하되 카운트만)
+        if not is_valid_match(my_data):
+            stats["error_matches"] += 1
+            continue
+
         stats["total_matches"] += 1
 
-        # 승/무/패
+        # 승/무/패 + 몰수승/몰수패
         result = my_data["result"]
-        if result == "승":
+        end_type_code = my_data.get("end_type", {}).get("code", 0)
+
+        if end_type_code == 1:  # 몰수승
+            stats["wins"] += 1
+            stats["forfeit_wins"] += 1
+        elif end_type_code == 2:  # 몰수패
+            stats["losses"] += 1
+            stats["forfeit_losses"] += 1
+        elif result == "승":
             stats["wins"] += 1
         elif result == "무":
             stats["draws"] += 1
@@ -389,6 +511,9 @@ def generate_overall_stats():
         "wins": stats["wins"],
         "draws": stats["draws"],
         "losses": stats["losses"],
+        "forfeit_wins": stats["forfeit_wins"],
+        "forfeit_losses": stats["forfeit_losses"],
+        "error_matches_excluded": stats["error_matches"],
         "win_rate": round(stats["wins"] / total * 100, 1) if total > 0 else 0,
         "total_goals_scored": stats["total_goals_scored"],
         "total_goals_conceded": stats["total_goals_conceded"],
@@ -502,6 +627,10 @@ def generate_time_zone_stats():
         if not my_data:
             continue
 
+        # 오류 경기 제외
+        if not is_valid_match(my_data):
+            continue
+
         # 내 슈팅 분석
         for shoot in my_data.get("shoot_details", []):
             tz = get_time_range(shoot["time"]["raw"])
@@ -559,6 +688,10 @@ def generate_zone_stats():
                 opponent_data = p
 
         if not my_data:
+            continue
+
+        # 오류 경기 제외
+        if not is_valid_match(my_data):
             continue
 
         # 내 슈팅
@@ -632,13 +765,19 @@ def generate_concede_patterns():
     }
 
     for match in silver_data:
+        my_data = None
         opponent_data = None
         for p in match["players"]:
-            if not p["is_me"]:
+            if p["is_me"]:
+                my_data = p
+            else:
                 opponent_data = p
-                break
 
         if not opponent_data:
+            continue
+
+        # 오류 경기 제외
+        if not is_valid_match(my_data):
             continue
 
         players_stats = opponent_data.get("players_stats", [])
@@ -755,6 +894,10 @@ def generate_player_stats():
                 break
 
         if not my_data:
+            continue
+
+        # 오류 경기 제외
+        if not is_valid_match(my_data):
             continue
 
         # 선수 스탯
