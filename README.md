@@ -19,7 +19,8 @@ FC Online 경기 분석 RAG 에이전트
 fconline-match-analyst-agent/
 ├── backend/                    # 데이터 수집
 │   ├── api-fconline/           # Nexon Open API 크롤러
-│   └── crawler-fconline-community/  # 커뮤니티 크롤러
+│   ├── crawler-fconline-community/  # 커뮤니티 크롤러
+│   └── crawler-fconline-server-maintenance/  # 서버 점검 공지 크롤러
 │
 ├── agent/                      # RAG 에이전트 코어
 │   ├── config.py               # LLM, VectorDB 설정
@@ -64,6 +65,10 @@ fconline-match-analyst-agent/
 ### 커뮤니티 데이터
 - **출처**: [FC Online 자유게시판](https://fconline.nexon.com/community/free)
 - **수집 항목**: 게시글 제목, 내용, 스쿼드 메이커 정보
+
+### 서버 점검 공지
+- **출처**: [FC Online 공지사항](https://fconline.nexon.com/news/notice/list) (점검 카테고리)
+- **수집 항목**: 점검 공지 제목, 내용, 날짜
 
 ## 기술 스택
 
